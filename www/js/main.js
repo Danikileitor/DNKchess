@@ -7,7 +7,7 @@ $(function () {
 	newGameAjax();
 
 	$.ajax({
-		url: "bookXml.xml",
+		url: "xml/book.xml",
 		cache: false,
 		dataType: "xml",
 		success: function (xml) {
