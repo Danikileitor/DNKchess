@@ -2,16 +2,31 @@
 
 var brd_side = COLOURS.WHITE;
 var brd_pieces = new Array(BRD_SQ_NUM);
-var brd_enPas = SQUARES.NO_SQ;
-var brd_fiftyMove;
-var brd_ply;
-var brd_hisPly;
-var brd_castlePerm;
+var brd_enPas = SQUARES.NO_SQ; // om en bonde går 2 steg framåt
+var brd_fiftyMove;	// om man gör 50 (100 totalt)drag utan att röra bönderna eller att någon bonde är tagen så kan man begära oavgjort
+var brd_hisPly;	// Denna håller reda på hur många drag som har gjorts; om 40 så har varje spelare gjort 20 drag var
+var brd_ply; // alla halvdrag gjorda i sökträdet, om ply är 6 så har 46 drag gjorts
+var brd_castlePerm;	//WKCA:WhiteKingSideCastle(4rutor rokad vit),WQCA:WhiteQueenSideCastle(5rutor rokad vit) osv
 var brd_posKey;
-var brd_pceNum = new Array(13);
-var brd_material = new Array(2);
+var brd_pceNum = new Array(13);  // hur många av varje pjäs (indexerad som PIECES: tom, vit bonde... svart kung)
+var brd_material = new Array(2);	// white, black totala värdet av pjäser per färg
 var brd_pList = new Array(14 * 10);
+/* vilken ruta befinner sig varje pjäs på 0-9 (vi har max 10 av varje pjäs, bonde blir drottning max 8 ggr=9drottningar)
+, 10-19:vita bönder , 20-29... vita hästar osv
+(t.ex 3vita bönder, positionerna finns då i, array index... 10, 11, 12)
+pceNum[PIECES.wP] = 3 (3vita bönder)
+for (pceNum = 0 ; pceNum < brd_pceNum; ++i){
+	sq[pceNum] = brd_pList[PIECES.wP * 10 + pceNum];
+}
+vilket ger att
+sq[1] = brd_pList[PIECES.wP * 10 + 0];
+sq[2] = brd_pList[PIECES.wP * 10 + 1];
+sq[3] = brd_pList[PIECES.wP * 10 + 2];
 
+En funktion för att ta fram var en pjäs befinner sig är 
+PCEINDEX(pce, pceNum)
+och finns under defs.js
+*/
 var brd_history = [];
 
 var brd_bookLines = [];
@@ -29,13 +44,13 @@ var brd_searchKillers = new Array(3 * MAXDEPTH);
 
 function BoardToFen() {
 	var fenStr = '';
-	var rank, file, sq, piece;
+	var row, col, sq, piece;
 	var emptyCount = 0;
 
-	for (rank = RANKS.RANK_8; rank >= RANKS.RANK_1; rank--) {
+	for (row = ROWS.ROW_8; row >= ROWS.ROW_1; row--) {
 		emptyCount = 0;
-		for (file = FILES.FILE_A; file <= FILES.FILE_H; file++) {
-			sq = FR2SQ(file, rank);
+		for (col = COLUMNS.COL_A; col <= COLUMNS.COL_H; col++) {
+			sq = fromRCMxToNumArrSq(col, row);
 			piece = brd_pieces[sq];
 			if (piece == PIECES.EMPTY) {
 				emptyCount++;
@@ -51,7 +66,7 @@ function BoardToFen() {
 			fenStr += String.fromCharCode('0'.charCodeAt() + emptyCount);
 		}
 
-		if (rank != RANKS.RANK_1) {
+		if (row != ROWS.ROW_1) {
 			fenStr += '/'
 		} else {
 			fenStr += ' ';
@@ -193,7 +208,8 @@ function BookMove() {
 	return bookMoves[num];
 }
 
-function PrintPceLists() {
+function PrintPceLists() { // Här skriver vi ut Pjäslistan
+	// t.ex svart bonde på 33 ger Piece P on D4... vi använder PceChar (defs.js PceChar = ".PNBRQKpnbrqk";) och PrSq (PrSq från io.js)
 	var piece, pceNum;
 
 	for (piece = PIECES.wP; piece <= PIECES.bK; ++piece) {
@@ -204,20 +220,57 @@ function PrintPceLists() {
 
 }
 
-function UpdateListsMaterial() {
+function UpdateListsMaterial() {	// Fyller brd_pList,brd_material[colour]
+
+
 
 	var piece, sq, index, colour;
 
-	for (index = 0; index < BRD_SQ_NUM; ++index) {
+	for (index = 0; index < BRD_SQ_NUM; ++index) {  // kör igenom alla rutor, även de utanför
 		sq = index;
-		piece = brd_pieces[index];
-		if (piece != PIECES.OFFBOARD && piece != PIECES.EMPTY) {
-			colour = PieceCol[piece];
+		piece = brd_pieces[index]; // piece får värdet som rutan har t.ex piece = PIECES.bQ -> piece = 11
+		if (piece != PIECES.OFFBOARD && piece != PIECES.EMPTY) { //om pjäs inte är offboard och om pjäs inte är tom
 
+			/* PieceCol = [ COLOURS.BOTH, COLOURS.WHITE, COLOURS.WHITE, COLOURS.WHITE, COLOURS.WHITE, COLOURS.WHITE, COLOURS.WHITE,
+	COLOURS.BLACK, COLOURS.BLACK, COLOURS.BLACK, COLOURS.BLACK, COLOURS.BLACK, COLOURS.BLACK ];*/
+			colour = PieceCol[piece];		// färg på pjäs på rutan, t.ex PIECES.bQ som är värd = 11 -> PieceCol[11] =COLOURS.BLACK
+
+			// pjäs värde vit : 100 bonde, 325 löpare och häst, 550 torn, 1000 drottning 50000 kung, svarta pjäser: ...
 			brd_material[colour] += PieceVal[piece];
+			/* värde på pjäs på ruta, .ex PIECES.bQ som är värd = 11 -> PieceVal[11]=1000
+			värdena adderas beroende på vilken färg pjäsen har. T.ex om vi först påträffar bQ och efter bR så kommer 
+			brd_material[COLOURS.BLACK] vara värt 1550
+			om sedan nästa pjäs är wQ så kommer 
+			brd_material[COLOURS.BLACK] vara värt 1550
+			och 
+			brd_material[COLOURS.WHITE] vara värt 1000
+			*/
 
 			brd_pList[PCEINDEX(piece, brd_pceNum[piece])] = sq;
+			/* brd_pceNum[piece] är VILKEN pjäs om det finns fler av en sort. 
+			t. ex om vi hittar en svart drottning så är brd_pceNum[PIECES.bQ] = 0 för denna 
+			eftersom vi vid resetBoard() har nollställt varje pjäsAntal (brd_pceNum[index] = 0;)
+			och 
+			PCEINDEX(piece,brd_pceNum[piece]) = PCEINDEX(11,0) = 110 + 0 = 110 
+			
+			function PCEINDEX(pce, pceNum) {
+				return (pce * 10 + pceNum);
+			}
+			
+			och 
+			brd_pList[110] = 1; (första svarta drottningen får index 110 och hittas på ruta 1 alltså andra rutan om vi börjar på 0)
+			
+			
+			*/
 			brd_pceNum[piece]++;
+			/*
+			nu ökas brd_pceNum med 1 och om vi har en svart drottning till så kommer den i forloopen att ge
+			t. ex brd_pList[111] = 42; 
+			(andra svarta drottningen får index 111 och hittas på ruta 42)
+			
+			Vill vi nu få tag i den andra drottningens position så skriver vi brd_pList[PCEINDEX(piece,brd_pceNum[piece])]
+			vilket då är brd_pList[PCEINDEX(11, 1)] = 42 alltså hittas den andra svarta drottningen på ruta 42
+			*/
 		}
 	}
 }
@@ -229,18 +282,18 @@ function GeneratePosKey() {
 	var piece = PIECES.EMPTY;
 
 	// pieces
-	for (sq = 0; sq < BRD_SQ_NUM; ++sq) {
-		piece = brd_pieces[sq];
-		if (piece != PIECES.EMPTY && piece != SQUARES.OFFBOARD) {
-			finalKey ^= PieceKeys[(piece * 120) + sq];
+	for (sq = 0; sq < BRD_SQ_NUM; ++sq) { // gå igenom alla rutor
+		piece = brd_pieces[sq]; // pjäs på en ruta
+		if (piece != PIECES.EMPTY && piece != SQUARES.OFFBOARD) {	// om rutan inte är tom och inte utanför brädan, alltså pjäs existerar
+			finalKey ^= PieceKeys[(piece * 120) + sq]; // "hasha in" denna nyckel i finalKey
 		}
 	}
 
-	if (brd_side == COLOURS.WHITE) {
+	if (brd_side == COLOURS.WHITE) { //om vit
 		finalKey ^= SideKey;
 	}
 
-	if (brd_enPas != SQUARES.NO_SQ) {
+	if (brd_enPas != SQUARES.NO_SQ) {		// om  enPas inte är en icke sq?
 		finalKey ^= PieceKeys[brd_enPas];
 	}
 
@@ -251,27 +304,33 @@ function GeneratePosKey() {
 
 function PrintBoard() {
 
-	var sq, file, rank, piece;
+	var sq, col, row, piece;
 
 	console.log("\nGame Board:\n");
 
-	for (rank = RANKS.RANK_8; rank >= RANKS.RANK_1; rank--) {
-		var line = ((rank + 1) + "  ");
-		for (file = FILES.FILE_A; file <= FILES.FILE_H; file++) {
-			sq = FR2SQ(file, rank);
-			piece = brd_pieces[sq];
-			line += (" " + PceChar[piece] + " ");
+	for (row = ROWS.ROW_8; row >= ROWS.ROW_1; row--) { // för varje rad
+		var line = ((row + 1) + "| "); // initiera line och sätt denna till rad nummer och ett streck
+		for (col = COLUMNS.COL_A; col <= COLUMNS.COL_H; col++) { // kolumner
+			sq = fromRCMxToNumArrSq(col, row);   // ta reda på NumArrSq för rutan
+			piece = brd_pieces[sq]; // sätt piece till vad rutan innehåller
+			line += (" " + PceChar[piece] + " "); // addera pjäs till raden som skrivs ut
 		}
-		console.log(line);
+		console.log(line); // skriv ut raden
 	}
 
-	console.log("");
-	var line = "   ";
-	for (file = FILES.FILE_A; file <= FILES.FILE_H; file++) {
-		line += (' ' + String.fromCharCode('a'.charCodeAt() + file) + ' ');
+	console.log("--------------------------------"); // efter rad loopen skriv streck
+	var line = "   ";  // sätt ny line till "   "
+	for (col = COLUMNS.COL_A; col <= COLUMNS.COL_H; col++) {
+		line += (' ' + String.fromCharCode('a'.charCodeAt() + col) + ' ');
+		/* addera bokstav och space till line 
+		col representerar en siffra så 
+		String.fromCharCode('a'.charCodeAt() + 0) blir "a"
+		String.fromCharCode('a'.charCodeAt() + 1) blir "b"
+		*/
 	}
 	console.log(line);
 	console.log("side:" + SideChar[brd_side]);
+	// SideChar är definierad i defs.js som SideChar = "wb-"; brd_side sätts i ParseFen funktionen
 	console.log("enPas:" + brd_enPas);
 	line = "";
 	if (brd_castlePerm & CASTLEBIT.WKCA) line += 'K';
@@ -319,28 +378,29 @@ function ResetBoard() {
 
 }
 
-function ParseFen(fen) {
+function ParseFen(fen) { // läser Fen strängen och ger värden till brd_pieces[] = piece, t.ex brd_pieces[26] = piece = PIECES.bQ = 11
 
-	var rank = RANKS.RANK_8;
-	var file = FILES.FILE_A;
-	var piece = 0;
+	var row = ROWS.ROW_8;
+	var col = COLUMNS.COL_A;
+	var piece = 0; // piece varierar i varje loop, sätt till piece eller till empty, om brädet är nollställt så är brädets rutor EMPTY
 	var count = 0;
 	var i = 0;
 	var sq64 = 0;
 	var sq120 = 0;
-	var fenCnt = 0;
+	var fenCnt = 0; // fen[fenCnt] peka på en viss char i fen stringen
 
-	ResetBoard();
+	ResetBoard(); // Funktionen finns precis över denna funktion
+	//rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
 
-	while ((rank >= RANKS.RANK_1) && fenCnt < fen.length) {
+	while ((row >= ROWS.ROW_1) && fenCnt < fen.length) { // while som går igenom raderna nerifrån och upp och fen strängen tills de är slut
 		count = 1;
-		switch (fen[fenCnt]) {
+		switch (fen[fenCnt]) { // switch fensträngen
 			case 'p': piece = PIECES.bP; break;
 			case 'r': piece = PIECES.bR; break;
 			case 'n': piece = PIECES.bN; break;
 			case 'b': piece = PIECES.bB; break;
 			case 'k': piece = PIECES.bK; break;
-			case 'q': piece = PIECES.bQ; break;
+			case 'q': piece = PIECES.bQ; break; // PIECES.bQ som är värd = 11
 			case 'P': piece = PIECES.wP; break;
 			case 'R': piece = PIECES.wR; break;
 			case 'N': piece = PIECES.wN; break;
@@ -358,65 +418,82 @@ function ParseFen(fen) {
 			case '8':
 				piece = PIECES.EMPTY;
 				count = fen[fenCnt].charCodeAt() - '0'.charCodeAt();
+				/* count sätts till 1 om bokstav eller symbol, men för tomma rutor så kan count bli större
+				 Exempel om fen är 6 så kommer count att bli 6. Den kör då en for
+				 http://www.w3schools.com/js/tryit.asp?filename=tryjs_math_random
+				 <script>
+var fen = "345623";
+var fenCnt=3;
+var count = fen[fenCnt].charCodeAt() - '0'.charCodeAt(); 
+document.write(count);
+</script>
+				 */
 				break;
 
-			case '/':
-			case ' ':
-				rank--;
-				file = FILES.FILE_A;
-				fenCnt++;
-				continue;
+			case '/': // ny rad uppåt
+			case ' ': // ny rad uppåt
+				row--;
+				col = COLUMNS.COL_A; // col sätts till vänster för det blir ny rad
+				fenCnt++; // vi går till nästa symbol direkt
+				continue; // vi struntar i att sätta pjäs till något och hoppar vidare i while loopen  
 
 			default:
 				printf("FEN error \n");
-				return;
+				return; // om något annat t.ex w eller b så hoppar vi ur whileloopen...
 		}
 
-		for (i = 0; i < count; i++) {
-			sq64 = rank * 8 + file;
-			sq120 = SQ120(sq64);
-			if (piece != PIECES.EMPTY) {
-				brd_pieces[sq120] = piece;
+		for (i = 0; i < count; i++) {// körs bara en gång om bokstav eller symbol... körs fler gånger bara om tomma rutor
+			sq64 = row * 8 + col;  // vi tittar på 64 brädets NumArrSq
+			sq120 = SQ120(sq64);    // vi gör om till 120 brädets position
+			if (piece != PIECES.EMPTY) { // om EJ tom sätt brd_pieces på 120 brädet till den pjäs som finns där
+				brd_pieces[sq120] = piece; // t.ex PIECES.bQ som är värd = 11
 			}
-			file++;
+			col++;
+			/* Om bokstav så ökar vi col med 1 men är det fler tomma rutor så kan col hoppa längre
+			om tomma rutor så sätter vi inte brd_pieces till något eftersom dessa då redan är satta till EMPTY
+			*/
 		}
-		fenCnt++;
+		fenCnt++; // vi går till nästa symbol
 	}
-
-	brd_side = (fen[fenCnt] == 'w') ? COLOURS.WHITE : COLOURS.BLACK;
-	fenCnt += 2;
+	// eftersom fen har nått till w eller b så har den hoppat ur whileloopen. Tittar vi på värdet så har vi antingen w eller b
+	brd_side = (fen[fenCnt] == 'w') ? COLOURS.WHITE : COLOURS.BLACK; // sätt till vit om w annars så sätt till svart
+	fenCnt += 2; // hoppa fram 2 steg i Fen strängen och titta på om vi har rokad villkor
 
 	for (i = 0; i < 4; i++) {
-		if (fen[fenCnt] == ' ') {
+		/*loopen betraktar KQkq som en symbol... efterom fenCnt ökar inuti forloopen
+		om vi har KQk så kommer fenCnt att öka tre steg i loopen. 
+		*/
+		if (fen[fenCnt] == ' ') { // om tom hoppa till nästa, sker efter rokad symboler t.ex efter KQk 
 			break;
 		}
 		switch (fen[fenCnt]) {
-			case 'K': brd_castlePerm |= CASTLEBIT.WKCA; break;
-			case 'Q': brd_castlePerm |= CASTLEBIT.WQCA; break;
+			case 'K': brd_castlePerm |= CASTLEBIT.WKCA; break; // hasha in WKCA
+			case 'Q': brd_castlePerm |= CASTLEBIT.WQCA; break; // hasha in WQCA
 			case 'k': brd_castlePerm |= CASTLEBIT.BKCA; break;
 			case 'q': brd_castlePerm |= CASTLEBIT.BQCA; break;
 			default: break;
 		}
-		fenCnt++;
+		fenCnt++; // vi ökar fenCnt efter varje bokstav
 	}
-	fenCnt++;
+	fenCnt++;	// nu går den till nästa char i Fen som kan vara - eller 0 eller 1
 
-	if (fen[fenCnt] != '-') {
-		file = fen[fenCnt].charCodeAt() - 'a'.charCodeAt();
-		rank = fen[fenCnt + 1].charCodeAt() - '1'.charCodeAt();
-		console.log("fen[fenCnt]:" + fen[fenCnt] + " File:" + file + " Rank:" + rank);
-		brd_enPas = FR2SQ(file, rank);
+	if (fen[fenCnt] != '-') {        // om ej - , alltså om 0 eller 1
+		col = fen[fenCnt].charCodeAt() - 'a'.charCodeAt();
+		row = fen[fenCnt + 1].charCodeAt() - '1'.charCodeAt();
+		console.log("fen[fenCnt]:" + fen[fenCnt] + " col:" + col + " row:" + row);
+		brd_enPas = fromRCMxToNumArrSq(col, row);
 	}
 
 	brd_posKey = GeneratePosKey();
 	UpdateListsMaterial();
 }
 
-function SqAttacked(sq, side) {
+function SqAttacked(sq, side) { // Tittar på om rutan hotas av någon pjäs, vi behöver aktuell ruta och vi behöver färg
 	var pce;
 	var t_sq;
 	var index;
 
+	// Hotar bonde?
 	if (side == COLOURS.WHITE) {
 		if (brd_pieces[sq - 11] == PIECES.wP || brd_pieces[sq - 9] == PIECES.wP) {
 			return BOOL.TRUE;
@@ -427,6 +504,7 @@ function SqAttacked(sq, side) {
 		}
 	}
 
+	// Hotar häst?
 	for (index = 0; index < 8; ++index) {
 		pce = brd_pieces[sq + KnDir[index]];
 		if (pce != SQUARES.OFFBOARD && PieceKnight[pce] == BOOL.TRUE && PieceCol[pce] == side) {
@@ -434,6 +512,7 @@ function SqAttacked(sq, side) {
 		}
 	}
 
+	// Hotar torn ELLER DROTTNING?
 	for (index = 0; index < 4; ++index) {
 		dir = RkDir[index];
 		t_sq = sq + dir;
@@ -450,6 +529,7 @@ function SqAttacked(sq, side) {
 		}
 	}
 
+	// Hotar löpare ELLER DROTTNING?
 	for (index = 0; index < 4; ++index) {
 		dir = BiDir[index];
 		t_sq = sq + dir;
@@ -466,6 +546,7 @@ function SqAttacked(sq, side) {
 		}
 	}
 
+	// Hotar kung?
 	for (index = 0; index < 8; ++index) {
 		pce = brd_pieces[sq + KiDir[index]];
 		if (pce != SQUARES.OFFBOARD && PieceKing[pce] == BOOL.TRUE && PieceCol[pce] == side) {
@@ -476,16 +557,16 @@ function SqAttacked(sq, side) {
 	return BOOL.FALSE;
 }
 
-function PrintSqAttacked() {
+function PrintSqAttacked() { // Skriv ut om rutan är hotad
 
-	var sq, file, rank, piece;
+	var sq, col, row, piece;
 
 	console.log("\nAttacked:\n");
 
-	for (rank = RANKS.RANK_8; rank >= RANKS.RANK_1; rank--) {
-		var line = ((rank + 1) + "  ");
-		for (file = FILES.FILE_A; file <= FILES.FILE_H; file++) {
-			sq = FR2SQ(file, rank);
+	for (row = ROWS.ROW_8; row >= ROWS.ROW_1; row--) {
+		var line = ((row + 1) + "  ");
+		for (col = COLUMNS.COL_A; col <= COLUMNS.COL_H; col++) {
+			sq = fromRCMxToNumArrSq(col, row);
 			if (SqAttacked(sq, COLOURS.BLACK) == BOOL.TRUE) piece = "X";
 			else piece = "-";
 			line += (" " + piece + " ");
